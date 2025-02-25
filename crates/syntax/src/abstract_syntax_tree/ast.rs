@@ -16,43 +16,41 @@ ast_node!(AstOutputSignalDecl, OutputSignalDecl);
 ast_node!(AstSignalDecl, SignalDecl);
 
 impl AstInputSignalDecl {
-    pub fn name(&self) -> Option<AstIdentifier> {
+    pub fn signal_identifier(&self) -> Option<AstComplexIdentifier> {
         support::child(self.syntax())
-    }
-
-    pub fn same_name(&self, other: &SyntaxText) -> bool {
-        if let Some(name) = self.name() {
-            return name.equal(other);
-        }
-        false
     }
 }
 
 impl AstOutputSignalDecl {
-    pub fn name(&self) -> Option<AstIdentifier> {
+    pub fn signal_identifier(&self) -> Option<AstComplexIdentifier> {
         support::child(self.syntax())
     }
 }
+
 impl AstSignalDecl {
-    pub fn name(&self) -> Option<AstIdentifier> {
+    pub fn signal_identifier(&self) -> Option<AstComplexIdentifier> {
         support::child(self.syntax())
     }
 }
+
 ast_node!(AstVarDecl, VarDecl);
 
 impl AstVarDecl {
-    pub fn name(&self) -> Option<AstIdentifier> {
+    pub fn var_identifier(&self) -> Option<AstComplexIdentifier> {
         support::child(self.syntax())
     }
 }
 
 ast_node!(AstComponentDecl, ComponentDecl);
 
+// component hash = Poseidon(2);
+// template --> Poseidon
+// component_identifier --> hash
 impl AstComponentDecl {
     pub fn template(&self) -> Option<AstTemplateName> {
         support::child(self.syntax())
     }
-    pub fn component_identifier(&self) -> Option<AstComponentIdentifier> {
+    pub fn component_identifier(&self) -> Option<AstComplexIdentifier> {
         support::child(self.syntax())
     }
 }
@@ -87,6 +85,23 @@ impl AstPragma {
     }
 }
 ast_node!(AstParameterList, TokenKind::ParameterList);
+
+impl AstParameterList {
+    pub fn parameters(&self) -> Vec<AstIdentifier> {
+        self.syntax()
+            .children()
+            .filter_map(AstIdentifier::cast)
+            .collect()
+    }
+}
+
+ast_node!(AstComplexIdentifier, ComplexIdentifier);
+
+impl AstComplexIdentifier {
+    pub fn name(&self) -> Option<AstIdentifier> {
+        support::child(self.syntax())
+    }
+}
 
 ast_node!(AstIdentifier, Identifier);
 
@@ -159,18 +174,10 @@ impl AstCircomProgram {
 ast_node!(AstComponentCall, ComponentCall);
 
 impl AstComponentCall {
-    pub fn component_name(&self) -> Option<AstComponentIdentifier> {
+    pub fn component_name(&self) -> Option<AstComplexIdentifier> {
         support::child(self.syntax())
     }
     pub fn signal(&self) -> Option<AstIdentifier> {
-        support::child(self.syntax())
-    }
-}
-
-ast_node!(AstComponentIdentifier, ComponentIdentifier);
-
-impl AstComponentIdentifier {
-    pub fn name(&self) -> Option<AstIdentifier> {
         support::child(self.syntax())
     }
 }

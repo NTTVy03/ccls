@@ -136,6 +136,36 @@ mod tests {
         }
         return r;
     }"#;
-         test(source, "test_function");
+        test(source, "test_function");
+    }
+
+    #[test]
+    fn test_operators() {
+        let source = r#"
+        ({[]})
+        ;.,:
+        && &
+        || |
+        != !
+        === == =
+        --> ==>
+        <-- <==
+        <= <
+        >= >
+        ++ += +
+        -- -= -
+        **= **
+        * *=
+        / /=
+        \ \=
+        % %=
+        ^ ^=
+        ~ ~=
+        >> >>=
+        << <<=
+        & &=
+        | |=
+    }"#;
+        test(source, "test_operators");
     }
 }

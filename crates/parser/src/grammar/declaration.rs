@@ -1,66 +1,137 @@
 use super::{
-    expression::{tuple, tuple_init},
+    expression::expression,
+    list::{tuple_expression, tuple_identifier},
     *,
 };
+use crate::parser::Parser;
 
-// "signal" --> None
-// "signal input" --> Some(true)
-// "signal output" --> Some(false)
+// [N][M-1]
+fn array(p: &mut Parser) -> bool {
+    let is_array = p.at(LBracket);
+
+    while p.at(LBracket) {
+        p.expect(LBracket);
+        expression(p);
+        p.expect(RBracket);
+    }
+
+    is_array
+}
+
+/*
+* eg: a, a[N], a[N][M - 1],...
+*/
+pub(crate) fn complex_identifier(p: &mut Parser) {
+    let open_marker = p.open();
+
+    // name
+    p.expect(Identifier);
+
+    // eg: [N - 1][M]
+    array(p);
+
+    p.close(open_marker, ComplexIdentifier);
+}
+
+/*
+"signal" --> None
+"signal input" --> Some(true)
+"signal output" --> Some(false)
+*/
 fn signal_header(p: &mut Parser) -> Option<bool> {
-    let mut res = None;
     let m = p.open();
     p.expect(SignalKw);
-    if p.at_any(&[InputKw, OutputKw]) {
-        if p.at(InputKw) {
-            res = Some(true);
-        } else {
-            res = Some(false);
-        }
-        p.advance();
 
-        if p.at(LCurly) {
-            p.expect(Identifier);
-            p.expect(RCurly);
-        }
+    let result = match p.current() {
+        InputKw => Some(true),
+        OutputKw => Some(false),
+        _ => None,
+    };
+
+    if result.is_some() {
+        p.advance();
     }
+
+    // signal tags
+    // {tag1, tag2, tag2}
+    // TODO: support list of tags
+    if p.at(LCurly) {
+        p.expect(Identifier);
+        p.expect(RCurly);
+    }
+
     p.close(m, SignalHeader);
-    res
+    result
+}
+
+/*
+var_init does not include `var` keyword
+eg: tmp = 10;
+*/
+pub(crate) fn var_init(p: &mut Parser) {
+    // var identifier
+    // eg: a[N]
+    complex_identifier(p);
+
+    // assign for variable
+    // eg: = 10
+    if p.at_var_assign() {
+        p.advance();
+        expression(p);
+    }
+}
+
+// eg: in[N - 1] <== c.in;
+pub(crate) fn signal_init(p: &mut Parser, assign_able: bool) {
+    // signal identifier
+    // eg: in[N]
+    complex_identifier(p);
+
+    // assign for  intermediate and outputs signals
+    // eg: <== Multiplier2().out
+    if assign_able && p.at_inline_assign_signal() {
+        p.advance();
+        expression(p);
+    }
 }
 
 /**
  * Declaration := "var" (SimpleSymbol, ..., SimpleSymbol) TupleInitialization |
- *               
- *             
+ *                "var" iden1 = init1, iden2 = init2, iden3         
  */
 pub(super) fn var_declaration(p: &mut Parser) {
     let m = p.open();
     p.expect(VarKw);
 
+    // tuple of variables
+    // eg: var (in1, in2, in3) = (1, 2, 3);
     if p.at(LParen) {
-        tuple(p);
-        if p.at(Assign) {
-            tuple_init(p);
+        tuple_identifier(p);
+        if p.at_var_assign() {
+            p.advance();
+            expression(p);
         }
     } else {
-        p.expect(Identifier);
-        if p.at(Assign) {
-            p.expect(Assign);
-            expression::expression(p);
-        }
-        // list of var
+        // list of variables
+        // var in1[N], in2 = 5;
+        var_init(p);
         while p.at(Comma) && !p.eof() {
-            p.expect(Comma);
-            p.expect(Identifier);
-            if p.at(Assign) {
-                p.expect(Assign);
-                expression::expression(p);
-            }
+            p.skip();
+            var_init(p);
         }
     }
+
     p.close(m, VarDecl);
 }
 
+/*
+* signal are immutable (can not modify after init value)
+* can not initialize value for input signal
+* since circom 2.0.4, it is also allowed to initialize
+intermediate and outputs signals right after their declaration
+*/
 pub(super) fn signal_declaration(p: &mut Parser) {
+    // TODO: can we remove that?
     if !p.at(SignalKw) {
         p.advance_with_error("Signal error");
         return;
@@ -68,54 +139,65 @@ pub(super) fn signal_declaration(p: &mut Parser) {
 
     let m = p.open();
     let io_signal = signal_header(p);
+    let assign_able = io_signal != Some(true);
 
+    // tuple of signal
+    // eg: signal (in1, in2, in3) <== tuple_value;
     if p.at(LParen) {
-        tuple(p);
-        if p.at_any(&[Assign, RAssignSignal, RAssignConstraintSignal]) {
-            tuple_init(p);
+        tuple_identifier(p);
+        // can not assign for input signal
+        if assign_able && p.at_inline_assign_signal() {
+            p.advance();
+            expression(p);
         }
     } else {
-        p.expect(Identifier);
-        // list of var
+        // list of signals
+        // signal in1[N], in2 <== signal_value;
+        signal_init(p, assign_able);
         while p.at(Comma) && !p.eof() {
             p.skip();
-            p.expect(Identifier);
+            signal_init(p, assign_able);
         }
     }
 
-    if let Some(is_input) = io_signal {
-        if is_input {
-            p.close(m, InputSignalDecl);
-        } else {
-            p.close(m, OutputSignalDecl);
-        }
-    } else {
-        p.close(m, SignalDecl);
-    }
+    let close_kind = match io_signal {
+        Some(true) => InputSignalDecl,
+        Some(false) => OutputSignalDecl,
+        None => SignalDecl,
+    };
+
+    p.close(m, close_kind);
 }
 
+/*
+* initialization in the definition of arrays of components is not allowed
+*/
 pub(super) fn component_declaration(p: &mut Parser) {
     let m = p.open();
     p.expect(ComponentKw);
-    let m_c = p.open();
-    p.expect(Identifier);
-    p.close(m_c, ComponentIdentifier);
 
-    p.expect(Assign);
-    let m_c = p.open();
-    p.expect(Identifier);
-    p.close(m_c, TemplateName);
-    p.expect(LParen);
+    // component identifier
+    // eg: comp[N - 1][10]
+    complex_identifier(p);
 
-    if p.at(Identifier) {
-        expression::expression(p);
-        while !p.at(RParen) && !p.eof() {
-            p.expect(Comma);
-            expression::expression(p);
-        }
+    // do not assign for array components
+    // but we will not catch this error
+    if p.at(Assign) {
+        p.expect(Assign);
+
+        // TODO: support `parallel` tag
+        // eg: component comp = parallel NameTemplate(...){...}
+
+        // template name
+        let m_c = p.open();
+        p.expect(Identifier);
+        p.close(m_c, TemplateName);
+
+        // template params
+        let parameter_marker = p.open();
+        tuple_expression(p);
+        p.close(parameter_marker, Call);
     }
-
-    p.expect(RParen);
 
     p.close(m, ComponentDecl);
 }

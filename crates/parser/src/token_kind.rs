@@ -9,7 +9,7 @@ pub enum TokenKind {
     #[error]
     Error = 0,
     // Comments
-    #[regex(r"//[^\n]*")]
+    #[regex(r"//[^\r\n]*")]
     CommentLine,
     #[token("/*")]
     CommentBlockOpen,
@@ -18,11 +18,12 @@ pub enum TokenKind {
     // Trivial
     #[regex("[ \t]+")]
     WhiteSpace,
-    #[regex("[\n]")]
+    #[regex(r"\r?\n")]
     EndLine,
-    // Circom
-    #[token("pragma")]
+    // Pragma
     Pragma,
+    #[token("pragma")]
+    PragmaKw,
     #[token("circom")]
     Circom,
     #[regex("2.[0-9].[0-9]")]
@@ -34,8 +35,6 @@ pub enum TokenKind {
     Identifier,
     #[regex(r#""[^"]*""#)]
     CircomString,
-    #[token("template")]
-    TemplateKw,
     // Brackets
     #[token("(")]
     LParen,
@@ -49,7 +48,7 @@ pub enum TokenKind {
     LBracket,
     #[token("]")]
     RBracket,
-    // Punctuation 
+    // Punctuation
     #[token(";")]
     Semicolon,
     #[token(",")]
@@ -123,7 +122,7 @@ pub enum TokenKind {
     ShiftR,
     #[token("<<")]
     ShiftL,
-    // Combined bitwise assignments 
+    // Combined bitwise assignments
     #[token("&=")]
     BitAndAssign,
     #[token("|=")]
@@ -155,6 +154,8 @@ pub enum TokenKind {
     #[token(":")]
     Colon,
     // Keywords
+    #[token("template")]
+    TemplateKw,
     #[token("function")]
     FunctionKw,
     #[token("component")]
@@ -188,34 +189,49 @@ pub enum TokenKind {
     ReturnKw,
     #[token("assert")]
     AssertKw,
-    // Complex token kind
-    ForLoop,
+    // Statements
+    IfStatement,
+    AssertStatement,
+    LogStatement,
+    ReturnStatement,
     AssignStatement,
+    ForLoop,
+    WhileLoop,
+    // Program
     CircomProgram,
-    SignalOfComponent,
+    // Function
+    FunctionDef,
+    FunctionName,
+    // Template
+    TemplateDef,
+    TemplateName,
+    // ComplexIdentifier, which will replace:
+    // ___ SignalIdentifier,
+    // ___ VarIdentifier,
+    // ___ ComponentIdentifier,
+    ComplexIdentifier,
+    // Signal
+    SignalDecl,
+    InputSignalDecl,
+    OutputSignalDecl,
     SignalHeader,
+    // Variable
+    VarDecl,
+    // Component
+    ComponentDecl,
+    ComponentCall,
+    SignalOfComponent,
+    // Expression
+    ExpressionAtom,
+    Expression,
+    // Complex token kind
     Block,
-    Tuple,
-    TupleInit,
+    ParameterList,
     Call,
     TenaryConditional,
     Condition,
-    Expression,
-    FunctionDef,
     Statement,
     StatementList,
-    ComponentDecl,
-    TemplateDef,
-    TemplateName,
-    FunctionName,
-    ParameterList,
-    SignalDecl,
-    VarDecl,
-    InputSignalDecl,
-    OutputSignalDecl,
-    ComponentCall,
-    ComponentIdentifier,
-    SignalIdentifier,
     ArrayQuery,
     ParserError,
     BlockComment,
@@ -254,58 +270,143 @@ impl From<TokenKind> for rowan::SyntaxKind {
 }
 
 impl TokenKind {
+    // a + 10 --> a and 10 are literals
     pub fn is_literal(self) -> bool {
         matches!(self, Self::Number | Self::Identifier)
     }
 
+    // these tokens have the lowest priority
+    // <identifier1> infix_operator <identifier2>
+    // eg: a + b --> + is an infix token
     pub fn infix(self) -> Option<(u16, u16)> {
         match self {
-            Self::BoolOr => Some((78, 79)),
-            Self::BoolAnd => Some((80, 81)),
-            Self::Equal
-            | Self::NotEqual
-            | Self::LessThan
+            // arithmetic operators
+            Self::Power => Some((99, 100)),
+            Self::Mul | Self::Div | Self::IntDiv | Self::Mod => Some((94, 95)),
+            Self::Add | Self::Sub => Some((89, 90)),
+            // shift bitwise operators
+            Self::ShiftL | Self::ShiftR => Some((84, 85)),
+            // relational operators
+            Self::LessThan
             | Self::GreaterThan
             | Self::LessThanAndEqual
-            | Self::GreaterThanAndEqual => Some((82, 83)),
-            Self::BitOr => Some((84, 85)),
-            Self::BitXor => Some((86, 87)),
-            Self::BitAnd => Some((88, 89)),
-            Self::ShiftL | Self::ShiftR => Some((90, 91)),
-            Self::Add | Self::Sub => Some((92, 93)),
-            Self::Mul | Self::Div | Self::IntDiv | Self::Mod => Some((94, 95)),
-            Self::Power => Some((96, 97)),
-            // TODO: review
-            Self::AddAssign | Self::SubAssign => Some((98,99)),
-            Self::MulAssign | Self::DivAssign | Self::IntDivAssign | Self::ModAssign => Some((100,101)),
-            Self::PowerAssign => Some((102,103)),
+            | Self::GreaterThanAndEqual => Some((79, 80)),
+            Self::Equal | Self::NotEqual => Some((74, 75)),
+            // other bitwise operators
+            Self::BitAnd => Some((69, 70)),
+            Self::BitXor => Some((64, 65)), // exclusive or
+            Self::BitOr => Some((59, 60)),
+            // boolean operators
+            Self::BoolAnd => Some((54, 55)),
+            Self::BoolOr => Some((49, 50)),
+            // ----------
+            // TODO: how about conditional operation ( ? : )
+            // associativity: right to left [ a ? b : c --> ??? ]
+
+            // ----------
+            // associativity: right to left [ a = b = c --> a = (b = c) ]
+            // DO NOT CONSIDER ASSIGMENT OPERATORS AS INFIX TOKENS
+            /*
+            // assignment operators
+            Self::Assign
+            // signal assigment operators
+            | Self::EqualSignal
+            | Self::LAssignSignal
+            | Self::LAssignContraintSignal
+            | Self::RAssignSignal
+            | Self::RAssignConstraintSignal
+            // bitwise asignment operators
+            | Self::BitOrAssign
+            | Self::BitXorAssign
+            | Self::BitAndAssign
+            | Self::ShiftLAssign
+            | Self::ShiftRAssign
+            // arithmetic asignament operators
+            | Self::AddAssign
+            | Self::SubAssign
+            | Self::MulAssign
+            | Self::DivAssign
+            | Self::IntDivAssign
+            | Self::ModAssign
+            | Self::PowerAssign => Some((44, 45)),
+            */
+            // TODO: how about comma (expression separator)
+            Self::Comma => Some((39, 40)),
+            // not an infix operator
             _ => None,
         }
     }
 
+    // priority: post > pre > in
+    // associativity: right to left [ --!a --> --(!a) ]
+    // prefix_operator <literal>
+    // eg: -10, !a, ++a, --a
     pub fn prefix(self) -> Option<u16> {
         match self {
-            // TODO: review UnitDec, UnitInc
-            Self::UnitDec | Self::UnitInc => Some(101),
-            Self::Sub => Some(100),
-            Self::Not => Some(99),
-            Self::BitNot => Some(98),
+            Self::UnitDec | Self::UnitInc | Self::Sub | Self::Add | Self::Not | Self::BitNot => {
+                Some(200)
+            }
+
             _ => None,
         }
     }
 
+    // these tokens have the highest priority
+    // <literal> postfix_operator
+    // eg: a[10], b++, c.att1
     pub fn postfix(self) -> Option<u16> {
         match self {
-            // TODO: review UnitDec, UnitInc
-            Self::UnitDec | Self::UnitInc => Some(202),
-            Self::Dot => Some(200),
-            Self::LBracket => Some(201),
+            Self::LParen // function call
+            | Self::LBracket // array subscript
+            | Self::Dot // attribute access
+            | Self::UnitDec | Self::UnitInc => Some(300),
+
             _ => None,
         }
     }
 
     pub fn is_declaration_kw(self) -> bool {
         matches!(self, Self::VarKw | Self::ComponentKw | Self::SignalKw)
+    }
+
+    pub fn is_assign_token(self) -> bool {
+        matches!(
+            self,
+            Self::Assign
+            // signal assigment operators
+            | Self::EqualSignal
+            | Self::LAssignSignal
+            | Self::LAssignContraintSignal
+            | Self::RAssignSignal
+            | Self::RAssignConstraintSignal
+            // bitwise asignment operators
+            | Self::BitOrAssign
+            | Self::BitXorAssign
+            | Self::BitAndAssign
+            | Self::ShiftLAssign
+            | Self::ShiftRAssign
+            // arithmetic asignament operators
+            | Self::AddAssign
+            | Self::SubAssign
+            | Self::MulAssign
+            | Self::DivAssign
+            | Self::IntDivAssign
+            | Self::ModAssign
+            | Self::PowerAssign // unit inc/dec
+                                // | Self::UnitInc
+                                // | Self::UnitDec
+        )
+    }
+
+    pub fn is_inline_assign_signal(self) -> bool {
+        matches!(
+            self,
+            Self::Assign | Self::RAssignSignal | Self::RAssignConstraintSignal
+        )
+    }
+
+    pub fn is_var_assign(self) -> bool {
+        matches!(self, Self::Assign)
     }
 
     pub fn is_trivial(self) -> bool {
